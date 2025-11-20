@@ -19,7 +19,6 @@
 
 <h1>音のデジタル化 実習</h1>
 
-<!-- Step 1 -->
 <div class="step" id="step1">
   <h2>Step 1：音の取得</h2>
   <select id="soundSelect">
@@ -36,7 +35,6 @@
   <audio id="originalAudio" controls></audio>
 </div>
 
-<!-- Step 2 -->
 <div class="step" id="step2">
   <h2>Step 2：標本化</h2>
   <label>標本化周波数：</label>
@@ -48,10 +46,8 @@
   </select>
   <button id="sampleBtn">標本化を実行</button><br>
   <canvas id="sampleCanvas" width="1200" height="200"></canvas>
-  <!-- zoom control kept centralized (same slider) -->
 </div>
 
-<!-- Step 3 -->
 <div class="step" id="step3">
   <h2>Step 3：量子化</h2>
   <label>量子化ビット数：</label>
@@ -65,13 +61,11 @@
   <canvas id="quantCanvas" width="1200" height="200"></canvas>
 </div>
 
-<!-- Step 4 -->
 <div class="step" id="step4">
   <h2>Step 4：符号化</h2>
   <pre id="binaryData">-- まだデータがありません --</pre>
 </div>
 
-<!-- Step 5 -->
 <div class="step" id="step5">
   <h2>Step 5：復元と聴き比べ</h2>
   <button id="reconstructBtn">復元データ作成</button><br>
@@ -81,17 +75,16 @@
 
 <script>
 /* -------------------------
-   状態変数（UIは変えない）
+   状態変数
    ------------------------- */
 let audioCtx = null;
 let originalBuffer = null; // AudioBuffer
 let sampledData = null;    // Float32Array (1D JS array ok)
 let quantizedData = null;  // Float32Array
+let currentSampleRate = 48000; // ★追加: Step2で実行した時のレートを記憶
 let zoom = 1;              // 横ズーム倍率 (1..100)
-let panFrac = 0.0;         // パン位置（0..1） 共通（各配列に合わせて解釈）
+let panFrac = 0.0;         // パン位置（0..1）
 let isDragging = false;
-let dragStartX = 0;
-let startPanFrac = 0.0;
 
 /* -------------------------
    ユーティリティ
@@ -131,11 +124,6 @@ function audioBufferToWavBlob(buffer){
 
 /* -------------------------
    波形描画（横ズーム＋パン対応）
-   canvas: HTMLCanvasElement
-   arr: Array-like of samples (-1..1) or AudioBuffer channel data
-   color: stroke color
-   zoom: 1..100 (1 = full signal width, larger => zoom in horizontally)
-   panFrac: 0..1 (0 = leftmost, 1 = rightmost)
    ------------------------- */
 function drawWave(canvas, arr, color='#0078d7', zoomLocal=1, panLocal=0.0){
   const ctx = canvas.getContext('2d');
@@ -144,14 +132,11 @@ function drawWave(canvas, arr, color='#0078d7', zoomLocal=1, panLocal=0.0){
   const w = canvas.width, h = canvas.height;
   const mid = h / 2;
 
-  // normalize amplitude for visibility (per-array)
   let maxAmp = 0;
   for(let i=0;i<arr.length;i++){ const v = Math.abs(arr[i]); if(v > maxAmp) maxAmp = v; }
   if(maxAmp === 0) maxAmp = 1;
 
-  // determine visible window in samples
-  const visibleCount = Math.max(1, Math.floor(arr.length / zoomLocal)); // number of samples to display
-  // clamp panLocal to [0, 1 - visibleCount/arr.length]
+  const visibleCount = Math.max(1, Math.floor(arr.length / zoomLocal)); 
   const maxPanFrac = Math.max(0, (arr.length - visibleCount) / arr.length);
   const pan = Math.max(0, Math.min(maxPanFrac, panLocal));
 
@@ -159,21 +144,18 @@ function drawWave(canvas, arr, color='#0078d7', zoomLocal=1, panLocal=0.0){
   const endIndex = Math.min(arr.length, startIndex + visibleCount);
   const sliceLen = endIndex - startIndex;
 
-  // draw polyline by sampling to canvas width
   ctx.beginPath();
   ctx.lineWidth = 1.2;
   for(let x=0; x < w; x++){
-    // map x -> sample index within slice
     const idx = startIndex + Math.floor((x / w) * sliceLen);
     const v = arr[idx] || 0;
-    const y = mid - (v / maxAmp) * (mid * 0.95); // 0.95 margin
+    const y = mid - (v / maxAmp) * (mid * 0.95); 
     if(x === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   }
   ctx.strokeStyle = color;
   ctx.stroke();
 
-  // center line
   ctx.beginPath();
   ctx.moveTo(0, mid);
   ctx.lineTo(w, mid);
@@ -189,7 +171,7 @@ async function createDoReMi(){
   const freqs = [261.63,293.66,329.63,349.23,392.00,440.00,493.88,523.25];
   const totalDur = 3.0;
   const noteDur = totalDur / freqs.length;
-  const sr = 44100;
+  const sr = 48000;
   const totalSamples = Math.floor(sr * totalDur);
   const buffer = audioCtx.createBuffer(1, totalSamples, sr);
   const data = buffer.getChannelData(0);
@@ -201,7 +183,6 @@ async function createDoReMi(){
       data[pos] = Math.sin(2*Math.PI*f*(i/sr)) * 0.6;
     }
   }
-  // pad if needed
   while(pos < totalSamples){ data[pos++] = 0; }
   return buffer;
 }
@@ -220,7 +201,6 @@ async function recordAudio(){
       recorder.onstop = async () => {
         const blob = new Blob(chunks, { type: 'audio/webm' });
         const array = await blob.arrayBuffer();
-        // decode using shared audioCtx to keep sampleRate consistent
         const decoded = await audioCtx.decodeAudioData(array.slice(0));
         resolve(decoded);
       };
@@ -252,34 +232,28 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
     originalBuffer = await createDoReMi();
   } else {
     try{
-      alert('🎙️ 3秒間録音します（自動停止）'); // user notice
+      alert('🎙️ 3秒間録音します（自動停止）'); 
       originalBuffer = await recordAudio();
     }catch(e){
-      // fallback: generate sample
       originalBuffer = await createDoReMi();
     }
   }
-  // draw full channel data (use getChannelData)
   const data = originalBuffer.getChannelData(0);
   drawWave(waveform, data, '#0078d7', zoom, panFrac);
-  // set original audio preview
   try{
     const blob = audioBufferToWavBlob(originalBuffer);
     document.getElementById('originalAudio').src = URL.createObjectURL(blob);
   }catch(e){ /* ignore */ }
 });
 
-// zoom slider (1..100)
 zoomSlider.addEventListener('input', (e)=>{
   zoom = Math.max(1, Math.min(100, Number(e.target.value)));
   zoomVal.textContent = zoom + '×';
-  // redraw all visible canvases using current panFrac
   if(originalBuffer) drawWave(waveform, originalBuffer.getChannelData(0), '#0078d7', zoom, panFrac);
   if(sampledData) drawWave(sampleCanvas, sampledData, '#e60000', zoom, panFrac);
   if(quantizedData) drawWave(quantCanvas, quantizedData, '#0078d7', zoom, panFrac);
 });
 
-// panning by drag on any canvas — shared panFrac across canvases
 function attachPan(canvasEl, dataGetter){
   let dragging = false, startX = 0, startPan = 0;
   canvasEl.addEventListener('pointerdown', (ev)=>{
@@ -293,41 +267,51 @@ function attachPan(canvasEl, dataGetter){
     if(!dragging) return;
     const dx = ev.clientX - startX;
     const w = canvasEl.clientWidth || canvasEl.width;
-    // compute relative delta in fraction of visible window
-    // visible fraction = 1/zoom
-    // moving dx pixels corresponds to dx/w * (visibleSamples / totalSamples) in fraction of data indices
-    // simpler: panFrac change = - dx / w * (zoom / 1) * (1 / zoom?) -> derive:
-    // We'll interpret dx/w -> move fraction of the current visible window; so pan change = - (dx / w) * (visibleCount / totalCount)
-    // But easier & robust: compute visibleCount/totalCount = 1/zoom, so pan change = - (dx / w) * (1/zoom)
     const panChange = - (dx / w) * (1/zoom);
     let newPan = startPan + panChange;
     newPan = Math.max(0, Math.min(1, newPan));
     panFrac = newPan;
-    // redraw all with new pan
     if(originalBuffer) drawWave(waveform, originalBuffer.getChannelData(0), '#0078d7', zoom, panFrac);
     if(sampledData) drawWave(sampleCanvas, sampledData, '#e60000', zoom, panFrac);
     if(quantizedData) drawWave(quantCanvas, quantizedData, '#0078d7', zoom, panFrac);
   });
   canvasEl.addEventListener('pointerup', (ev)=>{ dragging = false; try{ canvasEl.releasePointerCapture(ev.pointerId); }catch(e){} });
   canvasEl.addEventListener('pointercancel', ()=>{ dragging = false; });
-  canvasEl.addEventListener('pointerleave', ()=>{ /* don't stop dragging to allow smooth pan */ });
+  canvasEl.addEventListener('pointerleave', ()=>{ });
 }
 
-// Attach pan to canvases
 attachPan(waveform, ()=> originalBuffer ? originalBuffer.getChannelData(0) : null);
 attachPan(sampleCanvas, ()=> sampledData || null);
 attachPan(quantCanvas, ()=> quantizedData || null);
 
 /* -------------------------
-   Step2: 標本化
+   Step2: 標本化 (★修正箇所)
    ------------------------- */
 document.getElementById('sampleBtn').addEventListener('click', ()=>{
   if(!originalBuffer){ alert('まずStep1で音を取得してください'); return; }
-  const sr = parseInt(document.getElementById('sampleRate').value);
+  
+  // ★ユーザー選択のレートを取得・保存
+  const targetSR = parseInt(document.getElementById('sampleRate').value);
+  currentSampleRate = targetSR;
+
   const src = originalBuffer.getChannelData(0);
-  const step = Math.max(1, Math.floor(originalBuffer.sampleRate / sr));
+  const originalSR = originalBuffer.sampleRate;
+  
   sampledData = [];
-  for(let i=0;i<src.length;i+=step) sampledData.push(src[i]);
+  
+  // ★整数スキップではなく、比率計算でデータを取得
+  // ratio = 元の1サンプルが進む間に、新しいレートではどれくらい進むべきか（の逆）
+  // ここでは「新しいレートのインデックスi」に対して「元のレートのインデックス」を求める
+  const ratio = originalSR / targetSR;
+
+  // i は「間引き後の配列のインデックス」
+  // ループ条件：元のデータ範囲を超えない限り続ける
+  for(let i = 0; ; i++){
+    const srcIndex = Math.floor(i * ratio);
+    if(srcIndex >= src.length) break;
+    sampledData.push(src[srcIndex]);
+  }
+
   drawWave(sampleCanvas, sampledData, '#e60000', zoom, panFrac);
 });
 
@@ -346,7 +330,7 @@ document.getElementById('quantizeBtn').addEventListener('click', ()=>{
   }
   quantizedData = Array.from(q);
   drawWave(quantCanvas, quantizedData, '#0078d7', zoom, panFrac);
-  // binary display first 30 samples
+  
   const count = Math.min(30, q.length);
   const lines = [];
   for(let i=0;i<count;i++){
@@ -357,18 +341,20 @@ document.getElementById('quantizeBtn').addEventListener('click', ()=>{
 });
 
 /* -------------------------
-   Step5: 復元 & 再生
+   Step5: 復元 & 再生 (★修正箇所)
    ------------------------- */
 document.getElementById('reconstructBtn').addEventListener('click', ()=>{
   if(!quantizedData || quantizedData.length===0){ alert('まず量子化を実行してください'); return; }
   ensureAudioCtx();
-  const sr = parseInt(document.getElementById('sampleRate').value);
+  
+  // ★UIの値ではなく、Step2実行時に保存したレートを使用
+  const sr = currentSampleRate; 
+  
   const buf = audioCtx.createBuffer(1, quantizedData.length, sr);
   const arr = new Float32Array(quantizedData.length);
   for(let i=0;i<quantizedData.length;i++) arr[i] = quantizedData[i];
   buf.copyToChannel(arr, 0, 0);
-  // show restored waveform in place of quantCanvas as visual verification (keep quantCanvas also)
-  // build WAV for audio element
+
   try{
     const blob = audioBufferToWavBlob(buf);
     document.getElementById('reconstructedAudio').src = URL.createObjectURL(blob);
